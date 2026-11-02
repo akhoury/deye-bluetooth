@@ -214,6 +214,29 @@ def test_sun16k_grid_and_load_power_count_in_10w(key, expected):
     assert data[key] == expected
 
 
+# Same unit, grid off and Gen Force on, 2026-11-02 15:04 (dump_registers).
+SUN16K_GEN: dict[int, list[int]] = {
+    150: [26, 0, 26, 2226, 2226, 0, 2226, 2226, 0, 0, 0, 0, 0, 0, 60, 0],
+    166: [773, 0, 0, 0, 0, 0, 0, 812, 0, 812, 158, 0, 158, 158, 0, 2203],
+    182: [1210, 5948, 100, 158, 272, 301, 452, 0, 65522, 65534, 5000, 5000, 0, 273, 5000],
+}
+
+
+@pytest.mark.parametrize("key,expected", [
+    # Generator power stays in W: load 1580 W - inverter output 812 W = 768 W
+    # from the GEN port. Positive while the generator feeds in.
+    ("gen_power", 773),
+    ("house_load", 1580),
+    ("ups_power", 1580),        # grid off: the whole house is on the LOAD port
+    ("inverter_output_power", 812),
+    ("gen_voltage", 220.3),
+    ("gen_frequency", 50.0),
+    ("grid_connected", False),
+])
+def test_sun16k_generator_power_counts_in_watts(key, expected):
+    assert r.PROFILES[r.PROFILE_SINGLE_PHASE_HP].decode(SUN16K_GEN)[key] == expected
+
+
 def test_ups_power_is_the_load_port_not_the_total_load():
     # 176 and 178 carry the whole house (inverter output + grid) once a CT
     # puts loads on the grid side; 179 is the LOAD port alone. The 6K and 8K
