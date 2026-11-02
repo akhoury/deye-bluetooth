@@ -104,7 +104,10 @@ class DeyeBleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._discovered_name = discovery_info.name
         self.context["title_placeholders"] = {"name": discovery_info.name}
 
-        return await self._finish_or_confirm()
+        # Always ask, even when the advertised name is a valid serial: adding
+        # the entry starts polling, which occupies the logger's single BLE
+        # central slot. Someone has to want that.
+        return await self.async_step_confirm()
 
     async def async_step_user(
         self, user_input: dict | None = None
@@ -153,9 +156,10 @@ class DeyeBleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def _finish_or_confirm(self) -> ConfigFlowResult:
         """Skip the SN step when the advertised name is already a valid serial.
 
-        Deye loggers advertise their serial as the BLE name, so in the normal
-        case the user has nothing to type. Fall back to the confirm form only
-        when the advert name isn't a usable SN.
+        Manual path only: the user has already picked this device. Deye loggers
+        advertise their serial as the BLE name, so in the normal case there is
+        nothing to type. Fall back to the confirm form only when the advert name
+        isn't a usable SN.
         """
         try:
             sn = validate_logger_sn(self._discovered_name or "")
@@ -238,8 +242,8 @@ class DeyeBleOptionsFlowHandler(config_entries.OptionsFlow):
                 CONF_PROFILE, default=entry.data.get(CONF_PROFILE, PROFILE_AUTO)
             ): SelectSelector(SelectSelectorConfig(options=[
                 SelectOptionDict(value=PROFILE_AUTO, label="Auto-detect"),
-                SelectOptionDict(value=r.PROFILE_THREE_PHASE, label="Three-phase"),
-                SelectOptionDict(value=r.PROFILE_SINGLE_PHASE, label="Single-phase"),
+                *(SelectOptionDict(value=profile, label=label)
+                  for profile, label in r.PROFILE_LABELS.items()),
             ])),
         })
         return self.async_show_form(step_id="init", data_schema=schema)

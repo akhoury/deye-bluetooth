@@ -49,7 +49,7 @@ running and untouched.
 ## Installation (HACS)
 
 1. Add this repository as a [custom repository](https://hacs.xyz/docs/use/integrations/#add-custom-repositories)
-   in HACS → Integrations: the repository URL.
+   in HACS → Integrations: `https://github.com/akhoury/deye-bluetooth`.
 2. Download the integration through HACS.
 3. Restart Home Assistant.
 4. Go to **Settings → Devices & Services → Add Integration** and search for
@@ -89,7 +89,7 @@ The config flow supports two paths:
 
 | Path | Description |
 |------|-------------|
-| **BLE Discovery** | If the logger is advertising nearby, HA discovers it automatically via service UUID `00000922-...`. Confirm by entering the logger serial number. |
+| **BLE Discovery** | If the logger is advertising nearby, HA discovers it via service UUID `00000922-...` and offers it under Discovered; nothing is added until you confirm the logger serial number (pre-filled from the advertised name). Adding it starts polling, which takes the logger's single BLE connection. |
 | **Manual** | Pick a discovered BLE device from the list, then enter the logger serial number. |
 
 The **logger serial number** (e.g. `DEYE00000001`) is the BLE advertised name
@@ -100,7 +100,12 @@ drives all entity unique IDs.
 
 On first setup the integration reads register 0 (device type) once and stores
 the result in the config entry: `0x0003` selects the **single-phase** map
-(SUN-xK-SG0xLP1), anything else the **three-phase** map. Polls and writes never
+(SUN-xK-SG0xLP1), anything else the **three-phase** map. A single-phase unit
+rated 12 kW or more (registers 16–17) gets the **single-phase 12–16 kW** map
+instead: the same registers, but grid, CT and load power (167, 169, 170, 178,
+179) count in 10 W steps there. That was matched against Deye Cloud on a
+SUN-16K-SG01LP1; the 6K and 8K captures count in W, and the 12K/14K are assumed
+to behave like the 16K. Polls and writes never
 re-detect; re-adding the device does, and so does picking
 **Auto-detect** under Options → Inverter type. That option can also pin the
 map by hand if detection got it wrong. Each profile has its own register map and
@@ -120,7 +125,7 @@ After setup, **Settings → Devices & Services → Deye Bluetooth (Local) → Op
 | **Slow poll interval** | 300 s | Slow tier (settings, clock, BMS limits, lifetime info), 300–3600 s. |
 | **Cloud quiet window every / length** | 300 s / 30 s | Live + Deye Cloud only. |
 | **Reassert** | OFF | If a cloud/app write changes a register that HA last set, re-apply the HA value on the next poll cycle. |
-| **Inverter type** | detected | Auto-detect / Three-phase / Single-phase. Pins the register map; saving a change reloads the integration. |
+| **Inverter type** | detected | Auto-detect / Three-phase / Single-phase / Single-phase 12-16 kW (10 W power units). Pins the register map; saving a change reloads the integration. |
 
 Installs from before 0.2 are migrated: `dry_run` becomes `read_only`, keepalive
 off becomes Standard, keepalive on becomes Live local only at the old interval.
@@ -136,8 +141,9 @@ off becomes Standard, keepalive on becomes Live local only at the old interval.
 A held link also occupies an ESP proxy slot and blocks the phone app (the
 logger accepts one central at a time).
 
-Every mode reads three tiers: **live** (power flow, SOC, voltages) every poll,
-**fast** (daily energy, temperatures, PV strings, faults) every 60 s (or
+Every mode reads three tiers: **live** (power flow, SOC, voltages; on
+single-phase also every PV string's power, voltage and current) every poll,
+**fast** (daily energy, temperatures, faults; three-phase PV1) every 60 s (or
 every poll, when the poll interval is longer), and
 **slow** (settings, clock, BMS limits) on the slow interval or right after a
 write. Values from tiers not read in a cycle carry forward.
@@ -219,6 +225,27 @@ flowchart TD
 
 > Grid voltage phase order is L1, L3, L2 across `0x0273`–`0x0275`; only L2
 > (`0x0275`) was directly cross-checked against the app.
+
+### Single-phase PV strings
+
+The single-phase map has four MPPT strings: power at registers 186–189 and
+voltage/current pairs at 109–116 (PV1 109/110 … PV4 115/116), all on the live
+tier. `solar_power` is the sum of every string's power; a string the unit
+lacks reads 0. PV1 and PV2 sensors always exist; PV3 and PV4 sensors are
+created when register 18 (MPPT count, high byte) says the unit has them, or
+all four when that register could not be read at setup.
+
+### Single-phase load and production
+
+- `house_load` (178) is the whole house. With a CT, that includes loads on the
+  grid side, so it equals inverter output plus grid power (the Deye Cloud's
+  "Total Consumption Power"). `ups_power` (179) is the LOAD port alone (the
+  cloud's "UPS Load Power"). Without grid-side loads the two read the same.
+- `daily_production` / `total_production` are PV plus the GEN port
+  (`daily_gen`, `total_gen` at 92/95), which is what the cloud calls "Daily /
+  Total Active Production".
+- `total_consumption` is 32-bit (85/86). The cloud's "Cumulative Consumption"
+  shows only the low word, so it reads 6553.6 kWh short per wrap.
 
 ### Binary sensors
 

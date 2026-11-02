@@ -311,6 +311,16 @@ async def test_detect_profile_then_polls_never_read_the_device_type():
 
 
 @pytest.mark.asyncio
+async def test_the_10w_single_phase_map_is_single_phase_and_scales_power():
+    # Every platform picks its single-phase entity set from is_single_phase.
+    t = _SinglePhaseTransport()
+    coordinator = _coordinator(lambda _d: t, profile=r.PROFILE_SINGLE_PHASE_HP)
+    assert coordinator.is_single_phase
+    data = await _poll(coordinator)
+    assert (data["grid_power"], data["house_load"], data["battery_soc"]) == (190, 4850, 52)
+
+
+@pytest.mark.asyncio
 async def test_single_phase_write_lands_on_the_single_phase_register(monkeypatch):
     _stub_ble_device(monkeypatch)
     t = _SinglePhaseTransport()

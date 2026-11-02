@@ -24,7 +24,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_LOGGER_SN, DOMAIN, SYNC_RESULTS
 from .entity import device_info
 from .helpers import daily_calc
-from .registers import active_tou_slot
+from .registers import active_tou_slot, sp_pv_strings
 
 # (key, name, unit, device_class, state_class, icon, precision)
 SENSORS: list[tuple] = [
@@ -96,6 +96,9 @@ SINGLE_PHASE_SENSORS: list[tuple] = [
     ("daily_battery_charge", "Battery Charge Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, None, 2),
     ("daily_battery_discharge", "Battery Discharge Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, None, 2),
     ("daily_gen", "Generator Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:engine", 2),
+    ("total_gen", "Generator Total", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:engine", 2),
+    ("daily_production", "Production Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:solar-power", 2),
+    ("total_production", "Production Total", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:solar-power", 2),
     ("daily_inverter_energy", "Inverter Energy Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL, None, 2),
     ("total_inverter_energy", "Inverter Energy Total", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL, None, 2),
     ("total_consumption", "Consumption Total", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:home-lightning-bolt", 2),
@@ -107,6 +110,15 @@ SINGLE_PHASE_SENSORS: list[tuple] = [
     ("alarm", "Inverter Alarm", None, None, None, "mdi:alert-outline", None),
     ("fault", "Inverter Fault", None, None, None, "mdi:alert-octagon-outline", None),
 ]
+
+
+def _pv_string_rows(n: int) -> list[tuple]:
+    """Power/voltage/current rows for single-phase MPPT string *n* (PV3, PV4)."""
+    return [
+        (f"pv{n}_power", f"PV{n} Power", "W", SensorDeviceClass.POWER, SensorStateClass.MEASUREMENT, "mdi:solar-panel", 0),
+        (f"pv{n}_voltage", f"PV{n} Voltage", "V", SensorDeviceClass.VOLTAGE, SensorStateClass.MEASUREMENT, "mdi:solar-panel", 1),
+        (f"pv{n}_current", f"PV{n} Current", "A", SensorDeviceClass.CURRENT, SensorStateClass.MEASUREMENT, "mdi:solar-panel", 1),
+    ]
 
 # Single-phase settings, read on the slow tier and shown as diagnostics. Any
 # with a control entity (registers.PROFILES) is shown by that entity instead.
@@ -161,7 +173,12 @@ async def async_setup_entry(
     if coordinator.is_single_phase:
         # Settings that have a control entity are shown by that entity instead.
         controls = coordinator.register_profile.controls
-        entities = [DeyeSensor(coordinator, entry, *row) for row in SINGLE_PHASE_SENSORS]
+        # PV3/PV4 only where register 18 says the unit has them.
+        strings = sp_pv_strings((coordinator.data or {}).get("mppt_count"))
+        rows = SINGLE_PHASE_SENSORS + [
+            row for n in strings if n > 2 for row in _pv_string_rows(n)
+        ]
+        entities = [DeyeSensor(coordinator, entry, *row) for row in rows]
         entities += [
             DeyeSettingSensor(coordinator, entry, *row)
             for row in SINGLE_PHASE_SETTINGS if row[0] not in controls

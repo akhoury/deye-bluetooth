@@ -41,10 +41,17 @@ class Transport(Protocol):
 # --- Pure async poll (unit-testable with a fake transport) ------------------
 
 async def async_detect_profile(transport: Transport) -> str:
-    """Read the register-0 device type and map it to a register profile."""
+    """Read the register-0 device type and map it to a register profile.
+
+    A single-phase unit also has its rated power read: the 12-16 kW ones count
+    grid and load power in 10 W (see registers.PROFILE_SINGLE_PHASE_HP).
+    """
     await transport.handshake()
     (device_type,) = await transport.read(r.REG_DEVICE_TYPE, 1)
-    return r.profile_from_device_type(device_type)
+    if device_type != r.DEVICE_TYPE_SINGLE_PHASE:
+        return r.profile_from_device_type(device_type)
+    lo, hi = await transport.read(r.REG_SP_RATED_POWER, 2)
+    return r.profile_from_device_type(device_type, ((hi << 16) | lo) / 10)
 
 
 async def async_read_tiers(
@@ -376,6 +383,10 @@ _MONOTONIC_TOTAL_KEYS = (
     "total_battery_charge",
     "total_battery_discharge",
     "total_consumption",
+    # Single-phase: 92/95 share block 91 with total_solar, so a zeroed frame
+    # zeroes all three together.
+    "total_gen",
+    "total_production",
 )
 
 

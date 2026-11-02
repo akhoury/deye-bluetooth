@@ -17,7 +17,7 @@ daily_grid_import sensor.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Callable
 
@@ -300,26 +300,60 @@ DEVICE_TYPE_SINGLE_PHASE = 0x0003
 
 PROFILE_THREE_PHASE = "three_phase"
 PROFILE_SINGLE_PHASE = "single_phase"
+# The 12-16 kW single-phase units (SUN-12/14/16K-SG01LP1) report grid, CT and
+# load power in 10 W steps; the map is otherwise the single-phase one. Matched
+# on a SUN-16K-SG01LP1 against Deye Cloud, 2026-11-02 (house load 413 -> 4130 W
+# vs cloud 4120-4210 W); the 6K and 8K captures count in W. The 12K/14K share
+# the 16K's hardware and are assumed to match; Options can pin either map.
+PROFILE_SINGLE_PHASE_HP = "single_phase_hp"
+SINGLE_PHASE_PROFILES = frozenset((PROFILE_SINGLE_PHASE, PROFILE_SINGLE_PHASE_HP))
+PROFILE_LABELS: dict[str, str] = {
+    PROFILE_THREE_PHASE: "Three-phase",
+    PROFILE_SINGLE_PHASE: "Single-phase",
+    PROFILE_SINGLE_PHASE_HP: "Single-phase 12-16 kW (10 W power units)",
+}
+
+REG_SP_RATED_POWER = 16          # 16-17, 0.1 W, low word first
+SP_HP_MIN_RATED_POWER = 12000    # W
 
 
-def profile_from_device_type(raw: int) -> str:
-    """Map the register-0 device type to a decode profile."""
-    return PROFILE_SINGLE_PHASE if raw == DEVICE_TYPE_SINGLE_PHASE else PROFILE_THREE_PHASE
+def profile_from_device_type(raw: int, rated_power: float | None = None) -> str:
+    """Map the register-0 device type (and single-phase rated power, W) to a profile."""
+    if raw != DEVICE_TYPE_SINGLE_PHASE:
+        return PROFILE_THREE_PHASE
+    if rated_power is not None and rated_power >= SP_HP_MIN_RATED_POWER:
+        return PROFILE_SINGLE_PHASE_HP
+    return PROFILE_SINGLE_PHASE
 
 
 # Reads above 16 registers get no BLE reply.
 SP_LIVE_BLOCKS: list[tuple[int, int]] = [
+    (109, 8),   # PV1-PV4 voltage + current
     (150, 16),  # grid/inverter/load voltages, grid/CT/inverter currents
     (166, 16),  # gen/grid/CT/inverter/load power, load current, gen voltage
-    (182, 15),  # battery temp/V/SOC/I/P, PV1/PV2 power, frequencies, relays, gen freq
+    (182, 15),  # battery temp/V/SOC/I/P, PV1-PV4 power, frequencies, relays, gen freq
 ]
 SP_FAST_BLOCKS: list[tuple[int, int]] = [
     (59, 16),   # 59 state, 60/62 today energy/gen, 65-69 month/year, 70-74 battery energy
     (75, 16),   # 75-86 grid/load energy + grid frequency (79), 87-88 year load, 90 DC temp
     (91, 7),    # 91 AC temp, 92-95 generator energy, 96-97 total PV
-    (101, 12),  # 101-106 alarm/fault words, 108 daily PV, 109-112 PV1/PV2 V + I
+    (101, 8),   # 101-106 alarm/fault words, 108 daily PV
     (312, 13),  # BMS charge/discharge V, limits, SOC, V, I, temp, alarm/fault words
 ]
+
+# The map has four MPPT strings: power at 186-189, voltage/current pairs from
+# 109. Register 18's high byte says how many the unit has.
+SP_MAX_PV_STRINGS = 4
+
+
+def sp_pv_strings(mppt_count: int | None) -> list[int]:
+    """String numbers to expose for an inverter reporting *mppt_count* MPPTs.
+
+    PV1 and PV2 always exist (their entities predate the count). An unread
+    count shows all four: a zero sensor beats hiding a real string.
+    """
+    n = SP_MAX_PV_STRINGS if mppt_count is None else mppt_count
+    return list(range(1, max(2, min(n, SP_MAX_PV_STRINGS)) + 1))
 SP_SLOW_BLOCKS: list[tuple[int, int]] = [
     (2, 16),    # 2 protocol, 3-7 SN, 10-14 firmware, 16-17 rated power
     (18, 7),    # 18 MPPTs/phases, 22-24 inverter clock
@@ -349,13 +383,19 @@ _SP_DECODE_MAP: dict[str, tuple[int, float, bool, int]] = {
     "inverter_output_voltage": (154, 0.1,  False, 0),
     "inverter_output_current": (164, 0.01, True,  0),
     "inverter_output_frequency": (193, 0.01, False, 0),
-    # PV
+    # PV. A string the unit lacks reads 0 (PV3/PV4 on two-MPPT captures).
     "pv1_power":               (186, 1,    False, 0),
     "pv2_power":               (187, 1,    False, 0),
+    "pv3_power":               (188, 1,    False, 0),
+    "pv4_power":               (189, 1,    False, 0),
     "pv1_voltage":             (109, 0.1,  False, 0),
     "pv1_current":             (110, 0.1,  False, 0),
     "pv2_voltage":             (111, 0.1,  False, 0),
     "pv2_current":             (112, 0.1,  False, 0),
+    "pv3_voltage":             (113, 0.1,  False, 0),
+    "pv3_current":             (114, 0.1,  False, 0),
+    "pv4_voltage":             (115, 0.1,  False, 0),
+    "pv4_current":             (116, 0.1,  False, 0),
     # Grid
     "grid_power":              (169, 1,    True,  0),     # + import, - export
     "grid_inverter_side_power": (167, 1,   True,  0),
@@ -364,9 +404,10 @@ _SP_DECODE_MAP: dict[str, tuple[int, float, bool, int]] = {
     "grid_frequency":          (79,  0.01, False, 0),
     "external_ct_current":     (162, 0.01, True,  0),
     "external_ct_power":       (170, 1,    True,  0),
-    # Load
+    # Load. With a CT, 178 (and 176) is the whole house: inverter output plus
+    # grid. 179 is the LOAD port alone; the three agree without grid-side loads.
     "house_load":              (178, 1,    True,  0),
-    "ups_power":               (176, 1,    True,  0),
+    "ups_power":               (179, 1,    True,  0),
     "load_voltage":            (157, 0.1,  False, 0),
     "load_frequency":          (192, 0.01, False, 0),
     # Generator port
@@ -400,7 +441,6 @@ _SP_DECODE_MAP: dict[str, tuple[int, float, bool, int]] = {
 
 # Settings, decoded from SP_SLOW_BLOCKS.
 _SP_CONFIG_MAP: dict[str, tuple[int, float, bool, int]] = {
-    "protocol_version":        (2,   1,    False, 0),
     "battery_absorption_voltage": (202, 0.01, False, 0),
     "battery_float_voltage":   (203, 0.01, False, 0),
     "battery_capacity":        (204, 1,    False, 0),     # Ah
@@ -441,6 +481,7 @@ _SP_DECODE32: dict[str, tuple] = {
     "total_battery_discharge": (74, 75, 0.1),
     "total_consumption":       (85, 86, 0.1),
     "total_inverter_energy":   (63, 64, 0.1, True),  # signed, like 60
+    "total_gen":               (92, 95, 0.1),        # GEN port, high word at 95
 }
 _SP_CONFIG32: dict[str, tuple[int, int, float]] = {
     "rated_power":             (16, 17, 0.1),
@@ -516,20 +557,44 @@ def _decode_words_bitfield(words: list[int]) -> int:
     return sum(w << (16 * i) for i, w in enumerate(words))
 
 
-def decode_single_phase(words_by_reg: dict[int, list[int]]) -> dict:
+# Grid (167, 169), CT (170) and load (178, 179) power: W x power_scale.
+_SP_SCALED_POWER = (
+    "grid_power", "grid_inverter_side_power", "external_ct_power", "house_load", "ups_power",
+)
+
+
+def decode_single_phase(words_by_reg: dict[int, list[int]], power_scale: int = 1) -> dict:
     """Decode a single-phase poll (any subset of the SP_* tier blocks).
 
     Same contract as :func:`decode`: keys whose registers were not polled are
-    omitted, never guessed.
+    omitted, never guessed. *power_scale* is 10 on the 12-16 kW units (see
+    PROFILE_SINGLE_PHASE_HP).
     """
     result: dict = {}
     _decode_scalar(words_by_reg, _SP_DECODE_MAP, result)
+    for key in _SP_SCALED_POWER:
+        if key in result:
+            result[key] *= power_scale
     _decode_scalar(words_by_reg, _SP_CONFIG_MAP, result)
     _decode_32(words_by_reg, _SP_DECODE32, result)
     _decode_32(words_by_reg, _SP_CONFIG32, result)
 
-    if "pv1_power" in result and "pv2_power" in result:
-        result["solar_power"] = result["pv1_power"] + result["pv2_power"]
+    # Every string, not gated on the MPPT count: register 18 is slow-tier, so it
+    # is absent from most polls, and an absent string reads 0.
+    pv_power = [result[f"pv{n}_power"] for n in range(1, SP_MAX_PV_STRINGS + 1)
+                if f"pv{n}_power" in result]
+    if pv_power:
+        result["solar_power"] = sum(pv_power)
+
+    # What the Deye Cloud calls "active production": PV plus the GEN port.
+    for key, solar, gen in (("daily_production", "daily_solar", "daily_gen"),
+                            ("total_production", "total_solar", "total_gen")):
+        if solar in result and gen in result:
+            result[key] = round(result[solar] + result[gen], 1)
+
+    protocol = _lookup(words_by_reg, 2)
+    if protocol is not None:
+        result["protocol_version"] = f"{protocol:04X}"   # the cloud's "0201"
 
     state = _lookup(words_by_reg, 59)
     if state is not None:
@@ -719,6 +784,10 @@ PROFILES: dict[str, RegisterProfile] = {
         time_sync_reg=None,
     ),
 }
+PROFILES[PROFILE_SINGLE_PHASE_HP] = replace(
+    PROFILES[PROFILE_SINGLE_PHASE],
+    decode=lambda words_by_reg: decode_single_phase(words_by_reg, power_scale=10),
+)
 
 
 def tier_blocks(profile: RegisterProfile, tiers) -> list[tuple[tuple[int, int], bool]]:

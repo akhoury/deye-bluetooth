@@ -129,6 +129,18 @@ def test_all_four_blipped_totals_held_simultaneously():
     assert current == prev
 
 
+def test_a_zeroed_single_phase_totals_frame_is_held_whole():
+    # 92/95 (generator) share block 91 with 96/97 (PV), and the production
+    # total is their sum: one zeroed frame must not reset any of them.
+    from custom_components.deye_ble import registers as r
+
+    prev = r.decode_single_phase({91: [1485, 198, 0, 2000, 0, 13516, 2]})
+    zeroed = r.decode_single_phase({91: [1485, 0, 0, 0, 0, 0, 0]})
+    current = hold_spurious_total_resets(prev, zeroed)
+    for key in ("total_solar", "total_gen", "total_production"):
+        assert current[key] == prev[key] > 0, key
+
+
 def test_genuine_increase_passes_through():
     prev = {"total_grid_import": 2644.6}
     current = hold_spurious_total_resets(prev, {"total_grid_import": 2674.9})

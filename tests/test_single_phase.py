@@ -24,6 +24,9 @@ TELEMETRY: dict[int, list[int]] = {
     75: [0, 6, 0, 3878, 5000, 0, 0, 0, 0, 37, 3914, 0, 3367, 0, 1000, 1332],
     91: [1290, 1, 0, 2000, 0, 999, 0],
     101: [0, 0, 0, 0, 0, 0, 314, 0, 2278, 4, 59, 0],
+    # Not in the capture: PV3/PV4 voltage + current. This unit has two MPPTs, so
+    # they are taken to read 0, as PV3/PV4 power (188/189) do in the 182 block.
+    113: [0, 0, 0, 0],
     150: [2411, 0, 2411, 0, 2410, 0, 2410, 2442, 0, 0, 158, 0, 213, 0, 210, 0],
     166: [0, 19, 0, 19, 0, 0, 0, 466, 0, 466, 485, 0, 485, 485, 0, 932],
     182: [1166, 5223, 52, 485, 101, 0, 0, 0, 389, 745, 5000, 5000, 1, 20752, 5062],
@@ -97,9 +100,10 @@ def test_blocks_fit_ble_reads_and_do_not_overlap(blocks):
     ("smartload_on_soc", 100),
     ("smartload_min_solar_power", 0),
     ("rated_power", 800.0 * 10),
+    ("total_gen", 0.1),
     # inverter identity and settings
     ("inverter_serial", "1234567890"),
-    ("protocol_version", 0x0201),
+    ("protocol_version", "0201"),   # as the Deye Cloud shows it
     ("mppt_count", 2),
     ("phase_count", 1),
     ("battery_capacity", 314),
@@ -134,6 +138,12 @@ def test_decode(key, expected):
     assert _decode()[key] == expected
 
 
+def test_generator_total_high_word_is_95():
+    # ha-solarman's map (0x005C, 0x005F); 93 and 94 are not part of it. Every
+    # capture so far reads 0 at both 93 and 95, so this one is synthetic.
+    assert r.decode_single_phase({91: [0, 5, 7, 2000, 1, 0, 0]})["total_gen"] == 6554.1
+
+
 def test_inverter_energy_is_signed():
     # Reg 60 is load minus grid import, negative after grid-charging (PR #8).
     telemetry = dict(TELEMETRY)
@@ -147,16 +157,214 @@ def test_inverter_energy_is_signed():
 
 
 def test_unreliable_counters_are_not_decoded():
-    # 179 is load power (W) not current; month/year words undercount (PR #8).
+    # 179 is power (W), not current (it is ups_power); month/year words
+    # undercount (PR #8).
     data = _decode()
     for key in ("load_current", "month_solar", "month_load",
                 "month_grid_import", "year_solar", "year_load"):
         assert key not in data
 
 
-def test_solar_power_is_pv1_plus_pv2():
+def test_solar_power_on_a_two_string_unit():
     data = _decode()
     assert data["solar_power"] == data["pv1_power"] + data["pv2_power"] == 101
+
+
+# --- SUN-16K-SG01LP1-EU capture: three MPPTs ---------------------------------
+# deye_ble.dump_registers over a DL1000B, 2026-11-02 12:22 Asia/Beirut, battery
+# full so PV was curtailed, zero export to CT feeding grid-side loads. Deye
+# Cloud at 12:21:52: PV3 403.9 V / 2.9 A / 1127 W, PV cumulative 14458.8 kWh,
+# total consumption 3520 W, UPS load 80 W, grid 170 W.
+SUN16K: dict[int, list[int]] = {
+    16: [28928, 2],                             # rated power 16000.0 W
+    18: [769, 14, 255, 0, 6667, 525, 5634],
+    59: [2, 231, 0, 0, 298, 2, 1049, 1099, 871, 9977, 2, 125, 73, 62082, 0, 58868],
+    91: [1485, 198, 0, 2000, 0, 13516, 2],
+    101: [0, 0, 0, 0, 0, 0, 800, 299],
+    109: [4338, 30, 4334, 30, 4033, 30, 0, 0],
+    166: [0, 65182, 0, 13, 13, 0, 13, 3623, 0, 3623, 376, 0, 376, 8, 0, 54],
+    182: [1230, 5700, 100, 8, 1294, 1292, 1219, 0, 65515, 65533, 4942, 4942, 1, 16, 4958],
+}
+
+
+@pytest.mark.parametrize("key,expected", [
+    # Grid, CT and load power count in 10 W on the 12-16 kW units (ha-solarman's
+    # "scale: [1, 10]" registers). Same-minute cloud: grid 170, total
+    # consumption 3520, UPS 80; grid port 15.04 A x 238.3 V = 3.58 kVA.
+    ("grid_power", 130),
+    ("external_ct_power", 130),
+    ("grid_inverter_side_power", -3540),
+    ("house_load", 3760),
+    ("ups_power", 80),
+    # Inverter output, PV and battery stay in W.
+    ("inverter_output_power", 3623),
+    ("solar_power", 1294 + 1292 + 1219),
+    ("battery_power", -21),
+    ("rated_power", 16000.0),
+])
+def test_sun16k_grid_and_load_power_count_in_10w(key, expected):
+    data = r.PROFILES[r.PROFILE_SINGLE_PHASE_HP].decode(SUN16K)
+    assert data[key] == expected
+
+
+def test_ups_power_is_the_load_port_not_the_total_load():
+    # 176 and 178 carry the whole house (inverter output + grid) once a CT
+    # puts loads on the grid side; 179 is the LOAD port alone. The 6K and 8K
+    # captures read the same value in all three.
+    data = r.decode_single_phase(SUN16K)
+    assert (data["house_load"], data["ups_power"]) == (376, 8)
+
+
+@pytest.mark.parametrize("rated_words,profile", [
+    ([28928, 2], r.PROFILE_SINGLE_PHASE_HP),   # 16 kW
+    ([54464, 1], r.PROFILE_SINGLE_PHASE_HP),   # 12 kW
+    ([14464, 1], r.PROFILE_SINGLE_PHASE),      # 8 kW (the SG05LP1 capture)
+    ([60000, 0], r.PROFILE_SINGLE_PHASE),      # 6 kW
+])
+@pytest.mark.asyncio
+async def test_detection_picks_the_10w_map_from_the_rated_power(rated_words, profile):
+    t = _Transport()
+    t.words[16], t.words[17] = rated_words
+    assert await async_detect_profile(t) == profile
+    assert t.reads == [(r.REG_DEVICE_TYPE, 1), (r.REG_SP_RATED_POWER, 2)]
+
+
+def test_the_10w_map_shares_the_single_phase_blocks_and_controls():
+    sp, hp = r.PROFILES[r.PROFILE_SINGLE_PHASE], r.PROFILES[r.PROFILE_SINGLE_PHASE_HP]
+    assert (hp.live, hp.fast, hp.slow, hp.controls, hp.clock_reg) == (
+        sp.live, sp.fast, sp.slow, sp.controls, sp.clock_reg)
+    assert r.SINGLE_PHASE_PROFILES == {r.PROFILE_SINGLE_PHASE, r.PROFILE_SINGLE_PHASE_HP}
+    assert set(r.PROFILE_LABELS) == set(r.PROFILES)
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("mppt_count", 3),
+    ("pv1_power", 1294),
+    ("pv1_voltage", 433.8),
+    ("pv1_current", 3.0),
+    ("pv2_power", 1292),
+    ("pv2_voltage", 433.4),
+    ("pv3_power", 1219),
+    ("pv3_voltage", 403.3),
+    ("pv3_current", 3.0),
+    # No fourth MPPT: its registers read 0, so the sum below is safe.
+    ("pv4_power", 0),
+    ("pv4_voltage", 0),
+    ("pv4_current", 0),
+    ("solar_power", 1294 + 1292 + 1219),
+    ("total_solar", 14458.8),
+    # Cloud "total/daily active production" is PV plus the GEN port: cloud
+    # 14478.6 kWh at 12:21:52 = 14458.8 PV + 19.8 generator (92/95).
+    ("total_gen", 19.8),
+    ("total_production", 14478.6),
+    ("daily_solar", 29.9),
+    ("daily_gen", 0),
+    ("daily_production", 29.9),
+])
+def test_sun16k_capture_decodes(key, expected):
+    assert r.decode_single_phase(SUN16K)[key] == expected
+
+
+def _four_strings() -> dict[int, list[int]]:
+    """The 16K capture with a fourth string added. SYNTHETIC: no capture yet."""
+    words = dict(SUN16K)
+    live = list(words[182])
+    live[189 - 182] = 4320                    # PV4 power, W
+    words[182] = live
+    words[109] = words[109][:6] + [3600, 120]  # PV4 360.0 V / 12.0 A
+    words[18] = [0x0401] + words[18][1:]       # 4 MPPTs, 1 phase
+    return words
+
+
+@pytest.mark.parametrize("key,expected", [
+    ("pv3_power", 1219),
+    ("pv4_power", 4320),
+    ("pv4_voltage", 360.0),
+    ("pv4_current", 12.0),
+    ("mppt_count", 4),
+])
+def test_pv4_decodes(key, expected):
+    assert r.decode_single_phase(_four_strings())[key] == expected
+
+
+def test_solar_power_sums_every_string():
+    # pv1 + pv2 alone would miss PV3, the biggest string on the 16K.
+    assert r.decode_single_phase(_four_strings())["solar_power"] == 1294 + 1292 + 1219 + 4320
+
+
+def test_every_pv_string_is_read_on_the_live_tier():
+    live = {reg for start, n in r.SP_LIVE_BLOCKS for reg in range(start, start + n)}
+    assert set(range(186, 190)) <= live   # PV1-PV4 power
+    assert set(range(109, 117)) <= live   # PV1-PV4 voltage, current
+
+
+@pytest.mark.parametrize("mppt_count,strings", [
+    (2, [1, 2]),
+    (3, [1, 2, 3]),
+    (4, [1, 2, 3, 4]),
+    # Register 18 unread at setup: show every string rather than hide a real one.
+    (None, [1, 2, 3, 4]),
+    # PV1 and PV2 always exist (their entities predate the MPPT count); a
+    # nonsense count is clamped to the four strings the map has.
+    (1, [1, 2]),
+    (0, [1, 2]),
+    (9, [1, 2, 3, 4]),
+])
+def test_pv_strings_follow_the_mppt_count(mppt_count, strings):
+    assert r.sp_pv_strings(mppt_count) == strings
+
+
+class _FakeHass:
+    def __init__(self, coordinator):
+        self.data = {"deye_ble": {"entry": coordinator}}
+
+
+class _FakeCoordinator:
+    is_single_phase = True
+    register_profile = r.PROFILES[r.PROFILE_SINGLE_PHASE]
+
+    def __init__(self, data):
+        self.data = data
+
+
+class _FakeEntry:
+    entry_id = "entry"
+    data = {"logger_sn": "SN"}
+
+
+@pytest.mark.asyncio
+async def test_production_and_generator_totals_have_sensors():
+    # The cloud's "active production" figures and its generator total.
+    pytest.importorskip("homeassistant")
+    from custom_components.deye_ble import sensor
+
+    added = []
+    await sensor.async_setup_entry(
+        _FakeHass(_FakeCoordinator({"mppt_count": 3})), _FakeEntry(), added.extend,
+    )
+    ids = {e.unique_id for e in added}
+    assert {"SN_total_gen", "SN_daily_production", "SN_total_production"} <= ids
+
+
+@pytest.mark.parametrize("mppt_count,strings", [
+    (2, {1, 2}), (3, {1, 2, 3}), (4, {1, 2, 3, 4}), (None, {1, 2, 3, 4}),
+])
+@pytest.mark.asyncio
+async def test_pv_string_sensors_follow_the_mppt_count(mppt_count, strings):
+    pytest.importorskip("homeassistant")
+    from custom_components.deye_ble import sensor
+
+    data = {} if mppt_count is None else {"mppt_count": mppt_count}
+    added = []
+    await sensor.async_setup_entry(
+        _FakeHass(_FakeCoordinator(data)), _FakeEntry(), added.extend,
+    )
+    ids = {e.unique_id for e in added}
+    assert len(ids) == len(added)  # HA rejects a duplicate unique id
+    for n in range(1, 5):
+        keys = {f"SN_pv{n}_{q}" for q in ("power", "voltage", "current")}
+        assert (keys <= ids) == (n in strings), n
+        assert (keys & ids) in (set(), keys), n
 
 
 def test_tou_schedule():
@@ -203,6 +411,13 @@ def test_no_three_phase_keys():
 class _Transport:
     def __init__(self):
         self.reads: list[tuple[int, int]] = []
+        # Served by address, so any block layout covering the capture reads the
+        # same; a register outside the capture raises instead of reading 0.
+        self.words = {
+            start + i: w
+            for start, block in {**TELEMETRY, **CONFIG}.items()
+            for i, w in enumerate(block)
+        }
 
     async def handshake(self):
         pass
@@ -211,14 +426,14 @@ class _Transport:
         self.reads.append((address, count))
         if address == r.REG_DEVICE_TYPE:
             return [DEVICE_TYPE]
-        return {**TELEMETRY, **CONFIG}[address][:count]
+        return [self.words[address + i] for i in range(count)]
 
 
 @pytest.mark.asyncio
-async def test_detect_profile_reads_only_the_device_type():
+async def test_detect_profile_reads_the_device_type_and_rated_power():
     t = _Transport()
     assert await async_detect_profile(t) == r.PROFILE_SINGLE_PHASE
-    assert t.reads == [(r.REG_DEVICE_TYPE, 1)]
+    assert t.reads == [(r.REG_DEVICE_TYPE, 1), (r.REG_SP_RATED_POWER, 2)]
 
 
 @pytest.mark.asyncio
@@ -236,6 +451,7 @@ async def test_live_only_poll_reads_live_blocks():
     assert t.reads == r.SP_LIVE_BLOCKS
     # The live set is what a 5 s dashboard needs.
     assert {"battery_soc", "battery_power", "grid_power", "house_load", "solar_power"} <= data.keys()
+    assert {f"pv{n}_{q}" for n in range(1, 5) for q in ("power", "voltage", "current")} <= data.keys()
 
 
 def test_every_single_phase_control_reads_back_on_the_slow_tier():

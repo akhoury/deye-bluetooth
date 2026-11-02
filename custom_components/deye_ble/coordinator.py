@@ -287,7 +287,7 @@ class DeyeBleCoordinator(DataUpdateCoordinator):
 
     @property
     def is_single_phase(self) -> bool:
-        return self._profile == r.PROFILE_SINGLE_PHASE
+        return self._profile in r.SINGLE_PHASE_PROFILES
 
     @property
     def register_profile(self) -> r.RegisterProfile:
