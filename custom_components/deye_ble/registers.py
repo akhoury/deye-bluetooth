@@ -364,6 +364,7 @@ SP_SLOW_BLOCKS: list[tuple[int, int]] = [
     (264, 16),  # TOU slot voltage/SOC/charge source
     (280, 14),  # peak shaving flags, grid protection limits, peak shaving power
     (325, 1),   # BMS protocol
+    (418, 2),   # battery (BMS) version
 ]
 
 SP_REG_CLOCK = 22  # 22-24, packed like the three-phase 0x003E-0x0040
@@ -630,6 +631,10 @@ def decode_single_phase(words_by_reg: dict[int, list[int]], power_scale: int = 1
         # Same rendering as the Deye app: control board 13.12.11, comms board 14.10.
         result["firmware_control"] = ".".join(f"{w:04X}" for w in (fw[3], fw[2], fw[1]))
         result["firmware_comms"] = ".".join(f"{w:04X}" for w in (fw[4], fw[0]))
+    bms_version = _words(words_by_reg, 418, 2)
+    if bms_version is not None:
+        # The cloud's "Lithium Battery Version Number", e.g. 0000200A.
+        result["bms_version"] = "".join(f"{w:04X}" for w in bms_version)
     mppt = _lookup(words_by_reg, 18)
     if mppt is not None:
         result["mppt_count"] = mppt >> 8
@@ -684,11 +689,18 @@ def _decode_tou(words_by_reg) -> dict | None:
             "start": start, "end": end, "power": power[i], "soc": soc[i],
             "grid_charge": bool(charge[i] & 1), "gen_charge": bool(charge[i] & 2),
         })
-    return {
+    result = {
         "tou_enabled": bool(enable & 1),
         "tou_days": [d for i, d in enumerate(_WEEKDAYS) if enable >> (i + 1) & 1],
         "tou_slots": slots,
     }
+    # Flat per-program keys, one entity each (the cloud's prog_N_* set).
+    for n, slot in enumerate(slots, start=1):
+        result[f"tou_{n}_time"] = slot["start"]
+        result[f"tou_{n}_soc"] = slot["soc"]
+        result[f"tou_{n}_grid_charge"] = slot["grid_charge"]
+        result[f"tou_{n}_gen_charge"] = slot["gen_charge"]
+    return result
 
 
 def active_tou_slot(slots: list[dict], hhmm: str) -> int | None:

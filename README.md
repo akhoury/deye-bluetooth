@@ -246,6 +246,10 @@ all four when that register could not be read at setup.
   Total Active Production".
 - `total_consumption` is 32-bit (85/86). The cloud's "Cumulative Consumption"
   shows only the low word, so it reads 6553.6 kWh short per wrap.
+- Each time-of-use program has read-only entities: Program N Start, Program N
+  SOC, Program N Grid Charge, Program N Generator Charge (the cloud's
+  `prog_N_*` numbers, selects and switches). `Battery Version` (418–419) is the
+  cloud's "Lithium Battery Version Number".
 
 ### Binary sensors
 

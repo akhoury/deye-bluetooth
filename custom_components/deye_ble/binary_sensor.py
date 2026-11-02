@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import CONF_LOGGER_SN, DOMAIN
 from .entity import device_info
 from .helpers import infer_grid_connected
+from .registers import TOU_SLOTS
 
 
 async def async_setup_entry(
@@ -43,6 +44,11 @@ SINGLE_PHASE_FLAGS: list[tuple] = [
     ("gen_charge_enabled",  "Generator Charging",  None, "mdi:engine",                    True),
     ("solar_sell_enabled",  "Solar Sell",          None, "mdi:transmission-tower-export", True),
     ("tou_enabled",         "Time of Use Enabled", None, "mdi:calendar-clock",            True),
+] + [
+    row for n in range(1, TOU_SLOTS + 1) for row in (
+        (f"tou_{n}_grid_charge", f"Program {n} Grid Charge", None, "mdi:transmission-tower-import", True),
+        (f"tou_{n}_gen_charge",  f"Program {n} Generator Charge", None, "mdi:engine", True),
+    )
 ]
 
 

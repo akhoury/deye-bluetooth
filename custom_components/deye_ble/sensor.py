@@ -24,7 +24,7 @@ from homeassistant.util import dt as dt_util
 from .const import CONF_LOGGER_SN, DOMAIN, SYNC_RESULTS
 from .entity import device_info
 from .helpers import daily_calc
-from .registers import active_tou_slot, sp_pv_strings
+from .registers import TOU_SLOTS, active_tou_slot, sp_pv_strings
 
 # (key, name, unit, device_class, state_class, icon, precision)
 SENSORS: list[tuple] = [
@@ -131,6 +131,7 @@ SINGLE_PHASE_SETTINGS: list[tuple] = [
     ("mppt_count", "MPPT Count", None, None, None, "mdi:solar-panel", None),
     ("battery_mode", "Battery Mode", None, None, None, "mdi:battery-sync", None),
     ("bms_protocol", "BMS Protocol", None, None, None, "mdi:battery-sync", None),
+    ("bms_version", "Battery Version", None, None, None, "mdi:battery-check", None),
     ("battery_capacity", "Battery Capacity", "Ah", None, None, "mdi:battery", 0),
     ("battery_absorption_voltage", "Absorption Voltage", "V", SensorDeviceClass.VOLTAGE, None, None, 2),
     ("battery_float_voltage", "Float Voltage", "V", SensorDeviceClass.VOLTAGE, None, None, 2),
@@ -163,6 +164,11 @@ SINGLE_PHASE_SETTINGS: list[tuple] = [
     ("fault_code", "Fault Code", None, None, None, None, None),
     ("bms_alarm_code", "BMS Alarm Code", None, None, None, None, None),
     ("bms_fault_code", "BMS Fault Code", None, None, None, None, None),
+] + [
+    row for n in range(1, TOU_SLOTS + 1) for row in (
+        (f"tou_{n}_time", f"Program {n} Start", None, None, None, "mdi:clock-start", None),
+        (f"tou_{n}_soc", f"Program {n} SOC", "%", None, None, "mdi:battery-clock", 0),
+    )
 ]
 
 

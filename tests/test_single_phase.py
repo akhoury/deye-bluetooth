@@ -333,8 +333,8 @@ class _FakeEntry:
 
 
 @pytest.mark.asyncio
-async def test_production_and_generator_totals_have_sensors():
-    # The cloud's "active production" figures and its generator total.
+async def test_cloud_parity_values_have_sensors():
+    # The cloud's "active production" figures, generator total, battery version.
     pytest.importorskip("homeassistant")
     from custom_components.deye_ble import sensor
 
@@ -343,7 +343,7 @@ async def test_production_and_generator_totals_have_sensors():
         _FakeHass(_FakeCoordinator({"mppt_count": 3})), _FakeEntry(), added.extend,
     )
     ids = {e.unique_id for e in added}
-    assert {"SN_total_gen", "SN_daily_production", "SN_total_production"} <= ids
+    assert {"SN_total_gen", "SN_daily_production", "SN_total_production", "SN_bms_version"} <= ids
 
 
 @pytest.mark.parametrize("mppt_count,strings", [
@@ -381,6 +381,38 @@ def test_tou_schedule():
     assert r.active_tou_slot(slots, "08:11") == 1
     assert r.active_tou_slot(slots, "23:30") == 5
     assert r.active_tou_slot(slots, "00:59") == 5
+
+
+def test_battery_version_reads_like_the_cloud():
+    # 418-419 on the SUN-16K (2026-11-02): the cloud's "Lithium Battery
+    # Version Number" read 0000200A.
+    assert r.decode_single_phase({418: [0, 0x200A]})["bms_version"] == "0000200A"
+    assert any(start <= 418 and 419 < start + n for start, n in r.SP_SLOW_BLOCKS)
+
+
+def test_each_tou_program_has_flat_keys():
+    # One entity per program field, like the Deye Cloud's prog_N_* entities.
+    data = _decode()
+    assert [data[f"tou_{n}_time"] for n in range(1, 7)] == [
+        "01:00", "05:00", "09:00", "13:00", "17:00", "20:00"]
+    assert [data[f"tou_{n}_soc"] for n in range(1, 7)] == [50, 50, 95, 95, 100, 75]
+    assert [data[f"tou_{n}_grid_charge"] for n in range(1, 7)] == [False] * 4 + [True, False]
+    assert all(data[f"tou_{n}_gen_charge"] for n in range(1, 7))
+
+
+@pytest.mark.asyncio
+async def test_each_tou_program_has_entities():
+    pytest.importorskip("homeassistant")
+    from custom_components.deye_ble import binary_sensor, sensor
+
+    added = []
+    hass, entry = _FakeHass(_FakeCoordinator({"mppt_count": 3})), _FakeEntry()
+    await sensor.async_setup_entry(hass, entry, added.extend)
+    await binary_sensor.async_setup_entry(hass, entry, added.extend)
+    ids = {e.unique_id for e in added}
+    for n in range(1, 7):
+        for field in ("time", "soc", "grid_charge", "gen_charge"):
+            assert f"SN_tou_{n}_{field}" in ids, (n, field)
 
 
 def test_fault_bits_are_named():
