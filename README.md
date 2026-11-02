@@ -103,7 +103,7 @@ the result in the config entry: `0x0003` selects the **single-phase** map
 (SUN-xK-SG0xLP1), anything else the **three-phase** map. A single-phase unit
 rated 12 kW or more (registers 16–17) gets the **single-phase 12–16 kW** map
 instead: the same registers, but grid, CT and load power (167, 169, 170, 178,
-179) count in 10 W steps there. That was matched against Deye Cloud on a
+179) count in 10 W steps there, and battery current (191) in 0.1 A. That was matched against Deye Cloud on a
 SUN-16K-SG01LP1; the 6K and 8K captures count in W, and the 12K/14K are assumed
 to behave like the 16K. Polls and writes never
 re-detect; re-adding the device does, and so does picking

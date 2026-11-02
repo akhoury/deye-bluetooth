@@ -93,6 +93,8 @@ SINGLE_PHASE_SENSORS: list[tuple] = [
     ("gen_voltage", "Generator Voltage", "V", SensorDeviceClass.VOLTAGE, SensorStateClass.MEASUREMENT, "mdi:engine", 1),
     ("gen_frequency", "Generator Frequency", "Hz", SensorDeviceClass.FREQUENCY, SensorStateClass.MEASUREMENT, "mdi:engine", 2),
     ("daily_load", "Consumption Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:home-lightning-bolt", 2),
+    # Falls while the battery charges, so TOTAL rather than TOTAL_INCREASING.
+    ("daily_consumption_balance", "Consumption Today (Energy Balance)", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL, "mdi:home-lightning-bolt", 2),
     ("daily_battery_charge", "Battery Charge Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, None, 2),
     ("daily_battery_discharge", "Battery Discharge Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, None, 2),
     ("daily_gen", "Generator Today", "kWh", SensorDeviceClass.ENERGY, SensorStateClass.TOTAL_INCREASING, "mdi:engine", 2),

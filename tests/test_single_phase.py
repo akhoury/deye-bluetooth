@@ -179,9 +179,11 @@ SUN16K: dict[int, list[int]] = {
     16: [28928, 2],                             # rated power 16000.0 W
     18: [769, 14, 255, 0, 6667, 525, 5634],
     59: [2, 231, 0, 0, 298, 2, 1049, 1099, 871, 9977, 2, 125, 73, 62082, 0, 58868],
+    75: [0, 8, 0, 10112, 4942, 1, 1533, 0, 0, 239, 11013, 3, 57457, 0, 1000, 495],
     91: [1485, 198, 0, 2000, 0, 13516, 2],
     101: [0, 0, 0, 0, 0, 0, 800, 299],
     109: [4338, 30, 4334, 30, 4033, 30, 0, 0],
+    150: [2383, 0, 2383, 2367, 2379, 0, 2379, 2367, 0, 0, 1504, 0, 552, 0, 1420, 0],
     166: [0, 65182, 0, 13, 13, 0, 13, 3623, 0, 3623, 376, 0, 376, 8, 0, 54],
     182: [1230, 5700, 100, 8, 1294, 1292, 1219, 0, 65515, 65533, 4942, 4942, 1, 16, 4958],
 }
@@ -196,7 +198,12 @@ SUN16K: dict[int, list[int]] = {
     ("grid_inverter_side_power", -3540),
     ("house_load", 3760),
     ("ups_power", 80),
-    # Inverter output, PV and battery stay in W.
+    # Battery current is 0.1 A there (cloud -0.3/-0.4 A while BLE read -0.03;
+    # 573 W at 54.5 V is the cloud's 10.5 A). Grid/inverter currents agree as-is.
+    ("battery_current", -0.3),
+    ("grid_current", 15.04),
+    ("inverter_output_current", 14.2),
+    # Inverter output, PV and battery power stay in W.
     ("inverter_output_power", 3623),
     ("solar_power", 1294 + 1292 + 1219),
     ("battery_power", -21),
@@ -260,6 +267,11 @@ def test_the_10w_map_shares_the_single_phase_blocks_and_controls():
     ("daily_solar", 29.9),
     ("daily_gen", 0),
     ("daily_production", 29.9),
+    # The cloud's "Daily Consumption" is an energy balance, not register 84
+    # (metered load, 23.9): PV 29.9 + import 0.8 + discharge 7.3 - charge
+    # 12.5 - export 0 = 25.5 (cloud 25.1 at 12:15 with PV 29.6, import 0.7).
+    ("daily_load", 23.9),
+    ("daily_consumption_balance", 25.5),
 ])
 def test_sun16k_capture_decodes(key, expected):
     assert r.decode_single_phase(SUN16K)[key] == expected
@@ -343,7 +355,8 @@ async def test_cloud_parity_values_have_sensors():
         _FakeHass(_FakeCoordinator({"mppt_count": 3})), _FakeEntry(), added.extend,
     )
     ids = {e.unique_id for e in added}
-    assert {"SN_total_gen", "SN_daily_production", "SN_total_production", "SN_bms_version"} <= ids
+    assert {"SN_total_gen", "SN_daily_production", "SN_total_production", "SN_bms_version",
+            "SN_daily_consumption_balance"} <= ids
 
 
 @pytest.mark.parametrize("mppt_count,strings", [
@@ -381,6 +394,17 @@ def test_tou_schedule():
     assert r.active_tou_slot(slots, "08:11") == 1
     assert r.active_tou_slot(slots, "23:30") == 5
     assert r.active_tou_slot(slots, "00:59") == 5
+
+
+def test_energy_balance_counts_the_generator_and_export():
+    # Synthetic: no capture yet has generator energy or export on the day.
+    day = [0] * 16
+    day[62 - 59], day[70 - 59], day[71 - 59] = 15, 40, 20   # gen 1.5, charge 4.0, discharge 2.0
+    grid = [0] * 16
+    grid[76 - 75], grid[77 - 75] = 30, 10                    # import 3.0, export 1.0
+    pv = [0] * 7 + [100]                                     # 108: PV 10.0
+    data = r.decode_single_phase({59: day, 75: grid, 101: pv})
+    assert data["daily_consumption_balance"] == 10.0 + 1.5 + 3.0 + 2.0 - 4.0 - 1.0
 
 
 def test_battery_version_reads_like_the_cloud():

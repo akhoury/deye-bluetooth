@@ -303,7 +303,8 @@ PROFILE_SINGLE_PHASE = "single_phase"
 # The 12-16 kW single-phase units (SUN-12/14/16K-SG01LP1) report grid, CT and
 # load power in 10 W steps; the map is otherwise the single-phase one. Matched
 # on a SUN-16K-SG01LP1 against Deye Cloud, 2026-11-02 (house load 413 -> 4130 W
-# vs cloud 4120-4210 W); the 6K and 8K captures count in W. The 12K/14K share
+# vs cloud 4120-4210 W), battery current in 0.1 A; the 6K and 8K captures count
+# in W and 0.01 A. The 12K/14K share
 # the 16K's hardware and are assumed to match; Options can pin either map.
 PROFILE_SINGLE_PHASE_HP = "single_phase_hp"
 SINGLE_PHASE_PROFILES = frozenset((PROFILE_SINGLE_PHASE, PROFILE_SINGLE_PHASE_HP))
@@ -558,9 +559,11 @@ def _decode_words_bitfield(words: list[int]) -> int:
     return sum(w << (16 * i) for i, w in enumerate(words))
 
 
-# Grid (167, 169), CT (170) and load (178, 179) power: W x power_scale.
-_SP_SCALED_POWER = (
+# Grid (167, 169), CT (170) and load (178, 179) power, and battery current
+# (191): x power_scale. Grid and inverter currents (160, 164) are not scaled.
+_SP_SCALED = (
     "grid_power", "grid_inverter_side_power", "external_ct_power", "house_load", "ups_power",
+    "battery_current",
 )
 
 
@@ -569,13 +572,13 @@ def decode_single_phase(words_by_reg: dict[int, list[int]], power_scale: int = 1
 
     Same contract as :func:`decode`: keys whose registers were not polled are
     omitted, never guessed. *power_scale* is 10 on the 12-16 kW units (see
-    PROFILE_SINGLE_PHASE_HP).
+    PROFILE_SINGLE_PHASE_HP and _SP_SCALED).
     """
     result: dict = {}
     _decode_scalar(words_by_reg, _SP_DECODE_MAP, result)
-    for key in _SP_SCALED_POWER:
+    for key in _SP_SCALED:
         if key in result:
-            result[key] *= power_scale
+            result[key] = round(result[key] * power_scale, 2)
     _decode_scalar(words_by_reg, _SP_CONFIG_MAP, result)
     _decode_32(words_by_reg, _SP_DECODE32, result)
     _decode_32(words_by_reg, _SP_CONFIG32, result)
@@ -592,6 +595,14 @@ def decode_single_phase(words_by_reg: dict[int, list[int]], power_scale: int = 1
                             ("total_production", "total_solar", "total_gen")):
         if solar in result and gen in result:
             result[key] = round(result[solar] + result[gen], 1)
+
+    # The cloud's "Daily Consumption": an energy balance that, unlike the
+    # metered load (84), includes the inverter's own losses.
+    sources = ("daily_production", "daily_grid_import", "daily_battery_discharge")
+    sinks = ("daily_battery_charge", "daily_grid_export")
+    if all(k in result for k in sources + sinks):
+        result["daily_consumption_balance"] = round(
+            sum(result[k] for k in sources) - sum(result[k] for k in sinks), 1)
 
     protocol = _lookup(words_by_reg, 2)
     if protocol is not None:
