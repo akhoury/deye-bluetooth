@@ -360,6 +360,9 @@ class DeyeBleCoordinator(DataUpdateCoordinator):
 
         # A good cycle clears the transient-failure run.
         self._consecutive_failures = 0
+        # Only a successful read moves this: a failed poll returns the old
+        # snapshot, timestamp included, so its age is the data's age.
+        data["last_update"] = dt_util.utcnow()
 
         # Drift is measured against the clock reading it arrived with, BEFORE
         # the carry-forward below — recomputing it against a carried clock would

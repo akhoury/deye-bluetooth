@@ -437,6 +437,32 @@ async def test_write_queued_behind_a_poll_is_refused_if_read_only_turns_on(monke
 
 
 @pytest.mark.asyncio
+async def test_last_update_is_the_last_successful_poll(monkeypatch):
+    # A failed poll keeps the old values, so it must keep the old timestamp
+    # too: "20 s ago" has to mean the data is 20 s old.
+    from datetime import datetime, timezone
+
+    times = iter(datetime(2026, 11, 2, 12, 0, s, tzinfo=timezone.utc) for s in (1, 2, 3))
+    monkeypatch.setattr(coord_mod.dt_util, "utcnow", lambda: next(times))
+
+    class _Flaky(_SinglePhaseTransport):
+        fail = False
+
+        async def read(self, address, count):
+            if self.fail:
+                raise TimeoutError
+            return await super().read(address, count)
+
+    t = _Flaky()
+    coordinator = _coordinator(lambda _d: t, profile=r.PROFILE_SINGLE_PHASE)
+    first = (await _poll(coordinator))["last_update"]
+    t.fail = True
+    assert (await _poll(coordinator))["last_update"] == first
+    t.fail = False
+    assert (await _poll(coordinator))["last_update"] > first
+
+
+@pytest.mark.asyncio
 async def test_failed_slow_block_is_retried_once_then_acknowledged(clock):
     class _ClockBlockFails(_SinglePhaseTransport):
         async def read(self, address, count):

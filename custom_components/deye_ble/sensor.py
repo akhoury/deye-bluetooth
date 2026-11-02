@@ -192,6 +192,7 @@ async def async_setup_entry(
             for row in SINGLE_PHASE_SETTINGS if row[0] not in controls
         ]
         entities.append(DeyeTouScheduleSensor(coordinator, entry))
+        entities.append(DeyeLastUpdateSensor(coordinator, entry))
         entities.append(DeyeInverterClockSensor(coordinator, entry))
         entities.append(DeyeClockSyncResultSensor(coordinator, entry))
         entities.append(DeyeClockDriftSensor(coordinator, entry))
@@ -199,6 +200,7 @@ async def async_setup_entry(
         return
     entities = [DeyeSensor(coordinator, entry, *row) for row in SENSORS]
     entities.append(DeyeDailyConsumptionSensor(coordinator, entry))
+    entities.append(DeyeLastUpdateSensor(coordinator, entry))
     entities.append(DeyeInverterClockSensor(coordinator, entry))
     entities.append(DeyeClockSyncResultSensor(coordinator, entry))
     entities.append(DeyeClockDriftSensor(coordinator, entry))
@@ -278,6 +280,25 @@ class DeyeTouScheduleSensor(DeyeSensor):
             "days": data.get("tou_days"),
             "slots": data["tou_slots"],
         }
+
+
+class DeyeLastUpdateSensor(DeyeSensor):
+    """When the last poll succeeded; HA shows it as "20 seconds ago".
+
+    Always available, like the clock-sync result: once polls keep failing the
+    telemetry goes unavailable, but the time of the last good data is still
+    true and is exactly what an outage should show.
+    """
+
+    def __init__(self, coordinator, entry: ConfigEntry):
+        super().__init__(
+            coordinator, entry, "last_update", "Last Update", None,
+            SensorDeviceClass.TIMESTAMP, None, "mdi:update", None,
+        )
+
+    @property
+    def available(self) -> bool:
+        return True
 
 
 # -- Inverter clock (diagnostic) ----------------------------------------------

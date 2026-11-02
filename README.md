@@ -222,6 +222,7 @@ flowchart TD
 | `clock_sync_result` | Clock Sync Result | — | last `sync_clock` outcome — `ok` / `skipped` / `failed` / `clock_wrong`, with `sync_id`/`sync_attempts`/`sync_at` |
 | `inverter_clock_drift` | Inverter Clock Drift | s | derived — snapshot taken at each clock read |
 | `inverter_time_of_day_drift` | Inverter Clock Drift (Time of Day) | s | derived — date ignored, wrapped to ±12 h |
+| `last_update` | Last Update | timestamp | time of the last successful poll (shown as "20 seconds ago"); stays available through an outage |
 
 > Grid voltage phase order is L1, L3, L2 across `0x0273`–`0x0275`; only L2
 > (`0x0275`) was directly cross-checked against the app.

@@ -379,7 +379,25 @@ async def test_cloud_parity_values_have_sensors():
     )
     ids = {e.unique_id for e in added}
     assert {"SN_total_gen", "SN_daily_production", "SN_total_production", "SN_bms_version",
-            "SN_daily_consumption_balance"} <= ids
+            "SN_daily_consumption_balance", "SN_last_update"} <= ids
+
+
+@pytest.mark.asyncio
+async def test_last_update_stays_available_through_an_outage():
+    # When polls keep failing every telemetry entity goes unavailable, but
+    # "last good data at 14:02" is still true, and it is what you want to see.
+    pytest.importorskip("homeassistant")
+    from datetime import datetime, timezone
+    from custom_components.deye_ble import sensor
+
+    when = datetime(2026, 11, 2, 12, 2, tzinfo=timezone.utc)
+    coordinator = _FakeCoordinator({"last_update": when})
+    coordinator.last_update_success = False
+    added = []
+    await sensor.async_setup_entry(_FakeHass(coordinator), _FakeEntry(), added.extend)
+    entity = next(e for e in added if e.unique_id == "SN_last_update")
+    assert entity.available is True
+    assert entity.native_value == when
 
 
 @pytest.mark.parametrize("mppt_count,strings", [
